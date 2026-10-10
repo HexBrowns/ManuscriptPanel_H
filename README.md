@@ -1,9 +1,11 @@
 # ManuscriptPanel_H マニュアル
 
+<img src="images/ManuscriptPanel_H_screen.png" width="360">
+
 **ManuscriptPanel_H（原稿パネル）** は、Markdown で書いた原稿を行ごとに一覧にし、**クリックした行を、決めた見た目のテキストオブジェクトとしてカーソル位置に置く**プラグイン（Rust 製 `.aux2`）です。
 「原稿はあるが、尺（表示時間）はまだ決まっていない」段階で、原稿の文を打ち直さずにテロップを置いていくのに使います。置いた行には印が付くので、どこまで置いたかが原稿の側で分かります。
 
-- **バージョン:** 0.2.0（見出しの型、本文が違う行を原稿に合わせる、節をまとめて置く）
+- **バージョン:** 0.2.1（2026-10-10: 画面メモの頭の記号が □ になっていたのを直した。照合でプロジェクトのファイルが見つからないときの知らせを分かりやすくした。開いても出てこなかった編集メニュー・レイヤーの右クリックの「原稿パネルを開く」を外した。表示メニューから開きます）
 - **作者:** by HexBrowns
 - **必要環境:** AviUtl2 **2.1.11** 以上
 
@@ -14,13 +16,12 @@
 ## 開き方
 
 - **表示** メニュー → **原稿パネル**（ウィンドウ配置パネルからも選択可）
-- **編集** メニュー、またはレイヤーの右クリック → **原稿パネルを開く**（編集メニューの項目にはショートカットキーを割り当てられます）
 
 表示リストに出ない場合は AviUtl2 を再起動してください。
 
 ## 導入
 
-1. [Releases](https://github.com/HexBrowns/ManuscriptPanel_H/releases) から `HexBrowns.ManuscriptPanel_H-v0.2.0.au2pkg.zip` をダウンロードし、AviUtl2 のプレビューへドラッグ&ドロップする
+1. [Releases](https://github.com/HexBrowns/ManuscriptPanel_H/releases) から `HexBrowns.ManuscriptPanel_H-v0.2.1.au2pkg.zip` をダウンロードし、AviUtl2 のプレビューへドラッグ&ドロップする
    （手で置くなら、中の `Plugin` フォルダをデータフォルダ `C:\ProgramData\aviutl2` へコピーする）
 2. AviUtl2 を再起動する
 

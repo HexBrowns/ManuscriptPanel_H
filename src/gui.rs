@@ -218,6 +218,10 @@ impl ManuscriptApp {
                     }
                     format!("・ほかのシーン {n} 個（保存済みの .aup2 から）")
                 }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => format!(
+                    "（プロジェクトのファイル {} が見つからないので、ほかのシーンは見ていません）",
+                    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                ),
                 Err(e) => format!("（保存済みの .aup2 を読めませんでした: {e}）"),
             },
             None => "（プロジェクトが未保存なので、ほかのシーンは見ていません）".to_string(),
@@ -710,7 +714,7 @@ impl ManuscriptApp {
                         for memo in &item.memos {
                             ui.horizontal_top(|ui| {
                                 ui.add_space(24.0);
-                                ui.add(egui::Label::new(egui::RichText::new(format!("▸ {memo}")).small().weak()).wrap().selectable(false));
+                                ui.add(egui::Label::new(egui::RichText::new(format!("※ {memo}")).small().weak()).wrap().selectable(false));
                             });
                         }
                     }
