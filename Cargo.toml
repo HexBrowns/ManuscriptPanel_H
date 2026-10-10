@@ -1,0 +1,33 @@
+[package]
+name = "manuscript-panel-h"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+authors = ["HexBrowns"]
+description = "ManuscriptPanel_H - Markdown の原稿を行ごとに並べ、クリックした行をテキストオブジェクトとして置く AviUtl2 プラグイン"
+publish = false
+
+[lib]
+name = "manuscript_panel_h"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+aviutl2 = { version = "0.48", features = ["generic"] }
+aviutl2-eframe = "0.48"
+notify = "8"
+parking_lot = "0.12"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+lto = true
