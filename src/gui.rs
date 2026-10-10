@@ -58,6 +58,8 @@ pub struct ManuscriptApp {
     show_settings: bool,
     /// 本文が違う行だけを出す（第 2 段階）
     only_differ: bool,
+    /// 前のフレームの終わりに、どこかにフォーカスがあったか・ポップアップが開いていたか（Esc で設定を閉じてよいかの判定）
+    busy_last_frame: bool,
 }
 
 impl ManuscriptApp {
@@ -87,6 +89,7 @@ impl ManuscriptApp {
             status_is_error: false,
             show_settings: false,
             only_differ: false,
+            busy_last_frame: false,
         };
         // プロジェクトが覚えている原稿が先。無ければ最後に開いたもの
         let first = app.shared.write().open_request.take().or_else(|| app.settings.last_file.clone());
@@ -503,7 +506,7 @@ impl ManuscriptApp {
                 });
             if fixed {
                 let mut n = self.settings.fixed_layer.unwrap_or(1);
-                ui.add(egui::DragValue::new(&mut n).range(1..=999));
+                drag_value(ui, &mut n, |d| d.range(1..=999));
                 self.settings.fixed_layer = Some(n);
             } else {
                 self.settings.fixed_layer = None;
@@ -516,10 +519,9 @@ impl ManuscriptApp {
             let before = (self.settings.length_mode, self.settings.frames, self.settings.continuous);
             ui.label("長さ");
             ui.radio_value(&mut self.settings.length_mode, LengthMode::Frames, "");
-            ui.add_enabled(
-                self.settings.length_mode == LengthMode::Frames,
-                egui::DragValue::new(&mut self.settings.frames).range(1..=100_000).suffix(" フレーム"),
-            );
+            ui.add_enabled_ui(self.settings.length_mode == LengthMode::Frames, |ui| {
+                drag_value(ui, &mut self.settings.frames, |d| d.range(1..=100_000).suffix(" フレーム"));
+            });
             ui.radio_value(&mut self.settings.length_mode, LengthMode::ByChars, "文字数で").on_hover_text(format!(
                 "文字数 × {} 秒 + {} 秒（最短 {} フレーム）。制御文字は数えない。値は設定で変える",
                 self.settings.sec_per_char, self.settings.margin_sec, self.settings.min_frames
@@ -789,87 +791,99 @@ impl ManuscriptApp {
     fn render_settings(&mut self, ctx: &egui::Context) {
         let mut open = self.show_settings;
         let before = self.settings.clone();
-        egui::Window::new("原稿パネルの設定").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
-            egui::Grid::new("settings").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                ui.label("1 テロップの単位");
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.settings.unit, Unit::Line, "1 行");
-                    ui.radio_value(&mut self.settings.unit, Unit::Paragraph, "空行で区切った段落");
-                });
-                ui.end_row();
-                ui.label("カット番号のパターン");
-                ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.settings.cut_pattern).desired_width(160.0))
-                        .on_hover_text("正規表現。1 番目の括弧が番号になる（無ければ当たった全体）。当たった部分は本文から外す。空なら使わない");
-                    if ui.small_button("既定").clicked() {
-                        self.settings.cut_pattern = manuscript::DEFAULT_CUT_PATTERN.into();
-                    }
-                });
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut self.settings.show_non_cut, "カット番号の無い行も出す");
-                ui.end_row();
-                ui.label("画面メモの行頭");
-                ui.add(egui::TextEdit::singleline(&mut self.settings.memo_prefix).desired_width(40.0))
-                    .on_hover_text("この文字で始まる行は、直前の行のメモにする（テロップにしない）。空なら使わない");
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut self.settings.show_memos, "メモを出す");
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut self.settings.hide_placed, "置いた行を隠す");
-                ui.end_row();
-                ui.label("置く操作");
-                ui.horizontal(|ui| {
-                    ui.radio_value(&mut self.settings.click, ClickMode::Single, "クリック");
-                    ui.radio_value(&mut self.settings.click, ClickMode::Double, "ダブルクリック");
-                });
-                ui.end_row();
-                ui.label("印");
-                ui.checkbox(&mut self.settings.add_mark, "本文の末尾に <//原稿:ファイル名:番号//> を付ける")
-                    .on_hover_text("表示されないコメント。原稿を直した後や別のパソコンでも、照合で置いた行が分かる");
-                ui.end_row();
-                ui.label("まとめて置くときの間隔");
-                ui.add(egui::DragValue::new(&mut self.settings.gap).range(0..=10_000).suffix(" フレーム"))
-                    .on_hover_text("見出しの右クリックの「まとめて置く」で、テロップの間に空けるフレーム数");
-                ui.end_row();
-                ui.label("見出しの型");
-                ui.vertical(|ui| {
-                    if self.settings.heading_types.len() < 6 {
-                        self.settings.heading_types.resize(6, None);
-                    }
-                    for level in 1..=6 {
-                        ui.horizontal(|ui| {
-                            ui.label("#".repeat(level));
-                            let cur = self.settings.heading_types[level - 1].clone();
-                            let text = match &cur {
-                                None => "置かない".to_string(),
-                                Some(t) if t.is_empty() => "本体の初期値".to_string(),
-                                Some(t) => t.clone(),
-                            };
-                            egui::ComboBox::from_id_salt(("heading_type", level)).selected_text(text).width(180.0).show_ui(ui, |ui| {
-                                let slot = &mut self.settings.heading_types[level - 1];
-                                ui.selectable_value(slot, None, "置かない");
-                                ui.selectable_value(slot, Some(String::new()), "本体の初期値");
-                                for (name, _) in &self.types {
-                                    ui.selectable_value(slot, Some(name.clone()), name);
-                                }
+        // パネルが低いと見出し（×）が隠れるので、パネルに収めて中をスクロールさせる
+        let area = ctx.content_rect().shrink(4.0);
+        egui::Window::new("原稿パネルの設定")
+            .open(&mut open)
+            .resizable(false)
+            .collapsible(false)
+            .constrain_to(area)
+            .show(ctx, |ui| {
+            egui::ScrollArea::vertical().max_height((area.height() - 40.0).max(80.0)).show(ui, |ui| {
+                egui::Grid::new("settings").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label("1 テロップの単位");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.settings.unit, Unit::Line, "1 行");
+                        ui.radio_value(&mut self.settings.unit, Unit::Paragraph, "空行で区切った段落");
+                    });
+                    ui.end_row();
+                    ui.label("カット番号のパターン");
+                    ui.horizontal(|ui| {
+                        // 打っている途中の正規表現で読み直さない（Enter・ほかをクリックで確定、Esc で元に戻す）
+                        line_edit(ui, "cut_pattern_edit", &mut self.settings.cut_pattern, 160.0).0.on_hover_text(
+                            "正規表現。1 番目の括弧が番号になる（無ければ当たった全体）。当たった部分は本文から外す。空なら使わない。\nEnter かほかをクリックで確定、Esc で元に戻す",
+                        );
+                        if ui.small_button("既定").clicked() {
+                            self.settings.cut_pattern = manuscript::DEFAULT_CUT_PATTERN.into();
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut self.settings.show_non_cut, "カット番号の無い行も出す");
+                    ui.end_row();
+                    ui.label("画面メモの行頭");
+                    line_edit(ui, "memo_prefix_edit", &mut self.settings.memo_prefix, 40.0).0.on_hover_text(
+                        "この文字で始まる行は、直前の行のメモにする（テロップにしない）。空なら使わない。\nEnter かほかをクリックで確定、Esc で元に戻す",
+                    );
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut self.settings.show_memos, "メモを出す");
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut self.settings.hide_placed, "置いた行を隠す");
+                    ui.end_row();
+                    ui.label("置く操作");
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.settings.click, ClickMode::Single, "クリック");
+                        ui.radio_value(&mut self.settings.click, ClickMode::Double, "ダブルクリック");
+                    });
+                    ui.end_row();
+                    ui.label("印");
+                    ui.checkbox(&mut self.settings.add_mark, "本文の末尾に <//原稿:ファイル名:番号//> を付ける")
+                        .on_hover_text("表示されないコメント。原稿を直した後や別のパソコンでも、照合で置いた行が分かる");
+                    ui.end_row();
+                    ui.label("まとめて置くときの間隔");
+                    drag_value(ui, &mut self.settings.gap, |d| d.range(0..=10_000).suffix(" フレーム"))
+                        .on_hover_text("見出しの右クリックの「まとめて置く」で、テロップの間に空けるフレーム数");
+                    ui.end_row();
+                    ui.label("見出しの型");
+                    ui.vertical(|ui| {
+                        if self.settings.heading_types.len() < 6 {
+                            self.settings.heading_types.resize(6, None);
+                        }
+                        for level in 1..=6 {
+                            ui.horizontal(|ui| {
+                                ui.label("#".repeat(level));
+                                let cur = self.settings.heading_types[level - 1].clone();
+                                let text = match &cur {
+                                    None => "置かない".to_string(),
+                                    Some(t) if t.is_empty() => "本体の初期値".to_string(),
+                                    Some(t) => t.clone(),
+                                };
+                                egui::ComboBox::from_id_salt(("heading_type", level)).selected_text(text).width(180.0).show_ui(ui, |ui| {
+                                    let slot = &mut self.settings.heading_types[level - 1];
+                                    ui.selectable_value(slot, None, "置かない");
+                                    ui.selectable_value(slot, Some(String::new()), "本体の初期値");
+                                    for (name, _) in &self.types {
+                                        ui.selectable_value(slot, Some(name.clone()), name);
+                                    }
+                                });
                             });
-                        });
-                    }
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("文字数で決める長さ");
+                    ui.horizontal(|ui| {
+                        drag_value(ui, &mut self.settings.sec_per_char, |d| d.range(0.01..=5.0).speed(0.01).suffix(" 秒/字"));
+                        ui.label("+");
+                        drag_value(ui, &mut self.settings.margin_sec, |d| d.range(0.0..=30.0).speed(0.05).suffix(" 秒"));
+                        ui.label("最短");
+                        drag_value(ui, &mut self.settings.min_frames, |d| d.range(1..=10_000).suffix(" フレーム"));
+                    });
+                    ui.end_row();
                 });
-                ui.end_row();
-                ui.label("文字数で決める長さ");
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(&mut self.settings.sec_per_char).range(0.01..=5.0).speed(0.01).suffix(" 秒/字"));
-                    ui.label("+");
-                    ui.add(egui::DragValue::new(&mut self.settings.margin_sec).range(0.0..=30.0).speed(0.05).suffix(" 秒"));
-                    ui.label("最短");
-                    ui.add(egui::DragValue::new(&mut self.settings.min_frames).range(1..=10_000).suffix(" フレーム"));
-                });
-                ui.end_row();
+                ui.weak("既定の 0.25 秒/字は読む速さの上限 1 秒 4 文字、最短 25 フレームは 5/6 秒（字幕の基準）");
             });
-            ui.weak("既定の 0.25 秒/字は読む速さの上限 1 秒 4 文字、最短 25 フレームは 5/6 秒（字幕の基準）");
         });
         self.show_settings = open;
         if self.settings != before {
@@ -883,9 +897,73 @@ impl ManuscriptApp {
     }
 }
 
+/// 数値の欄（ルール au2-rs-plugin「入力の確定と取り消し」）。`update_while_editing(false)` を付けて出す。
+/// 打っている途中の値は使わず、Enter かほかをクリックしてフォーカスが外れたときに確定する。入力中の Esc は入力前の値に戻す。
+/// ドラッグで変えた値はその場で使う。
+///
+/// egui 0.36 の `DragValue` は `update_while_editing(false)` でも、Esc の次のフレームで打った文字を値にしてしまう
+/// （フォーカスを失ったとみなす期間が 2 フレームあり、2 フレーム目には Esc が押されていないため）。
+/// Esc のフレームの値を覚えておき、次のフレームで戻す（参照実装 LayerSilenceCut_H の `setting_value`）
+fn drag_value<T>(ui: &mut egui::Ui, value: &mut T, build: impl FnOnce(egui::DragValue<'_>) -> egui::DragValue<'_>) -> egui::Response
+where
+    T: egui::emath::Numeric + Default + Send + Sync,
+{
+    let resp = ui.add(build(egui::DragValue::new(value)).update_while_editing(false));
+    let key = resp.id.with("escaped");
+    let pass = ui.ctx().cumulative_pass_nr();
+    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.ctx().data_mut(|d| d.insert_temp(key, (pass, *value)));
+    } else if let Some((at, before)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, T)>(key)) {
+        if pass == at + 1 {
+            *value = before;
+        }
+    }
+    resp
+}
+
+/// 確定してから使う 1 行の入力欄（ルール au2-rs-plugin「入力の確定と取り消し」）。
+///
+/// 打っている間の文字は欄の中（egui の一時領域）だけに持ち、`value` を書き換えるのは
+/// Enter・ほかをクリック・Tab でフォーカスが外れたときだけ。入力中の Esc は、入力を始める前の文字に戻す。
+/// 戻り値の bool は、確定して `value` が変わったときだけ true
+fn line_edit(ui: &mut egui::Ui, id_salt: &str, value: &mut String, width: f32) -> (egui::Response, bool) {
+    // ウィンドウの中で一意な名前から作る（親の Ui の自動の ID は、前に出す部品の数で変わる）
+    let id = egui::Id::new(("line_edit", id_salt));
+    let key = id.with("pending");
+    // 入力中の Esc は取り消し。egui はこのフレームの始めに Esc でフォーカスを外しているので、
+    // 「フォーカスが無い + このフレームの Esc」なら、入力中だった文字を描く前に捨てる
+    if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) && !ui.ctx().memory(|m| m.has_focus(id)) {
+        ui.ctx().data_mut(|d| d.remove_temp::<String>(key));
+    }
+    // 前のフレームまで入力中だった文字。無ければ今の値を出す
+    let mut buf = ui.ctx().data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| value.clone());
+    let resp = ui.add(egui::TextEdit::singleline(&mut buf).id(id).desired_width(width));
+    let committed = finish_line_edit(ui.ctx(), key, resp.has_focus(), buf, value);
+    (resp, committed)
+}
+
+/// `line_edit` の後半。フォーカスがある間は入力中の文字を覚え、外れたら確定するか取り消す
+fn finish_line_edit(ctx: &egui::Context, key: egui::Id, focused: bool, buf: String, value: &mut String) -> bool {
+    if focused {
+        ctx.data_mut(|d| d.insert_temp(key, buf));
+        return false;
+    }
+    // 入力中だった文字が残っていれば確定する（Esc で取り消したときは、描く前に捨ててある）
+    let was_editing = ctx.data_mut(|d| d.remove_temp::<String>(key)).is_some();
+    if !was_editing || buf == *value {
+        return false;
+    }
+    *value = buf;
+    true
+}
+
 impl eframe::App for ManuscriptApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Esc で設定のウィンドウを閉じるのは、押す前にどこにもフォーカスが無く、ポップアップも開いていなかったときだけ
+        // （入力中の Esc は入力を取り消すだけ、コンボボックス・右クリックのメニューの Esc はそれを閉じるだけにする）。
+        // egui はこのフレームの始めに Esc でフォーカスを外しているので、前のフレームの終わりの状態で見る
+        let esc_closes = ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !self.busy_last_frame;
         // プロジェクトを開いたときに、そのプロジェクトが覚えていた原稿
         let request = self.shared.write().open_request.take();
         if let Some(p) = request {
@@ -919,7 +997,11 @@ impl eframe::App for ManuscriptApp {
         });
         if self.show_settings {
             self.render_settings(&ctx);
+            if esc_closes {
+                self.show_settings = false;
+            }
         }
+        self.busy_last_frame = ctx.memory(|m| m.focused().is_some()) || ctx.any_popup_open();
         for a in actions {
             match a {
                 Action::Place(t) => self.place(&t),
@@ -930,6 +1012,129 @@ impl eframe::App for ManuscriptApp {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// テストの 1 フレームの出力を捨てる。テクスチャの差分を片付けずに捨てると、デバッグビルドで epaint の debug_assert
+    /// （Dropped TexturesDelta with N unapplied deltas）が落ちる（au2 release の prebuild の cargo test はデバッグビルド）
+    fn discard_frame(mut out: egui::FullOutput) {
+        out.textures_delta.clear();
+    }
+
+    use super::*;
+
+    fn key(k: egui::Key) -> egui::Event {
+        egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    /// 1 フレーム回す。戻り値は（確定したか, 欄に出ている文字）
+    fn frame(ctx: &egui::Context, events: Vec<egui::Event>, value: &mut String, focus: bool) -> (bool, String) {
+        let mut out = (false, String::new());
+        let raw = egui::RawInput { events, ..Default::default() };
+        discard_frame(ctx.run_ui(raw, |ui| {
+            let (resp, committed) = line_edit(ui, "t", value, 100.0);
+            if focus {
+                resp.request_focus();
+            }
+            let shown = ui.ctx().data(|d| d.get_temp::<String>(resp.id.with("pending"))).unwrap_or_else(|| value.clone());
+            out = (committed, shown);
+        }));
+        out
+    }
+
+    /// フォーカスを当てて "X" を打つところまで
+    fn start(ctx: &egui::Context, value: &mut String) {
+        frame(ctx, vec![], value, true);
+        let (committed, shown) = frame(ctx, vec![egui::Event::Text("X".into())], value, false);
+        assert!(!committed);
+        assert_eq!(shown, "oldX");
+        assert_eq!(value, "old", "打っている途中では値を変えない");
+    }
+
+    #[test]
+    fn enter_commits() {
+        let ctx = egui::Context::default();
+        let mut value = "old".to_string();
+        start(&ctx, &mut value);
+        let (committed, _) = frame(&ctx, vec![key(egui::Key::Enter)], &mut value, false);
+        assert!(committed);
+        assert_eq!(value, "oldX");
+        // 次のフレームで二度確定しない
+        assert!(!frame(&ctx, vec![], &mut value, false).0);
+    }
+
+    #[test]
+    fn escape_reverts() {
+        let ctx = egui::Context::default();
+        let mut value = "old".to_string();
+        start(&ctx, &mut value);
+        let (committed, shown) = frame(&ctx, vec![key(egui::Key::Escape)], &mut value, false);
+        assert!(!committed);
+        assert_eq!(value, "old");
+        assert_eq!(shown, "old", "欄の文字も入力前に戻る");
+        assert!(!frame(&ctx, vec![], &mut value, false).0);
+        assert_eq!(value, "old");
+    }
+
+    #[test]
+    fn losing_focus_commits() {
+        let ctx = egui::Context::default();
+        let mut value = "old".to_string();
+        start(&ctx, &mut value);
+        // ほかをクリックしたのと同じく、フォーカスを外す
+        ctx.memory_mut(|m| m.stop_text_input());
+        let (committed, _) = frame(&ctx, vec![], &mut value, false);
+        assert!(committed);
+        assert_eq!(value, "oldX");
+    }
+
+    /// 数値の欄を 1 フレーム回す
+    fn drag_frame(ctx: &egui::Context, events: Vec<egui::Event>, value: &mut i32, focus: bool) {
+        let raw = egui::RawInput { events, ..Default::default() };
+        discard_frame(ctx.run_ui(raw, |ui| {
+            let resp = drag_value(ui, value, |d| d.range(0..=100));
+            if focus {
+                resp.request_focus();
+            }
+        }));
+    }
+
+    /// フォーカスを当てて 5 を消し、42 を打つところまで
+    fn drag_start(ctx: &egui::Context, value: &mut i32) {
+        drag_frame(ctx, vec![], value, true);
+        let mut events = vec![key(egui::Key::Backspace); 5];
+        events.push(egui::Event::Text("42".into()));
+        drag_frame(ctx, events, value, false);
+        assert_eq!(*value, 5, "打っている途中では値を変えない");
+    }
+
+    #[test]
+    fn drag_value_escape_reverts_for_following_frames() {
+        let ctx = egui::Context::default();
+        let mut value = 5;
+        drag_start(&ctx, &mut value);
+        drag_frame(&ctx, vec![key(egui::Key::Escape)], &mut value, false);
+        assert_eq!(value, 5);
+        // egui は Esc の次のフレームで打った文字を値にする。3 フレーム先まで元のままか
+        for n in 1..=3 {
+            drag_frame(&ctx, vec![], &mut value, false);
+            assert_eq!(value, 5, "Esc の {n} フレーム後");
+        }
+    }
+
+    #[test]
+    fn drag_value_enter_commits() {
+        let ctx = egui::Context::default();
+        let mut value = 5;
+        drag_start(&ctx, &mut value);
+        drag_frame(&ctx, vec![key(egui::Key::Enter)], &mut value, false);
+        assert_eq!(value, 42);
+        for _ in 0..3 {
+            drag_frame(&ctx, vec![], &mut value, false);
+            assert_eq!(value, 42);
         }
     }
 }

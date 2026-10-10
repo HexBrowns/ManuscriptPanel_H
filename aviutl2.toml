@@ -7,7 +7,7 @@
 [project]
 id = "HexBrowns.ManuscriptPanel_H"
 name = "ManuscriptPanel_H"
-version = "0.2.1"
+version = "0.3.0"
 
 [artifacts."ManuscriptPanel_H.aux2"]
 build = "cargo build --release"
